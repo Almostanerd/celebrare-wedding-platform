@@ -28,6 +28,7 @@ import {
 
 const rawApiUrl = import.meta.env.VITE_API_URL || 'https://celebrare-wedding-platform.onrender.com';
 const API_BASE = rawApiUrl.replace(/\/+$/, '');
+
 // Cultural SVG Ornaments
 const GaneshaIcon = ({ className = "w-10 h-10", fill = "#D97706" }) => (
   <svg viewBox="0 0 100 100" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -251,16 +252,19 @@ export default function App() {
       setCurrentSlug(slugParam);
       setPublishedUrl(window.location.href);
       fetch(`${API_BASE}/api/invites/${slugParam}`)
-        .then(res => res.json())
+        .then(async (res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
         .then(json => {
           if (json.success && json.data) {
             const inv = json.data;
             setFormData(prev => ({
               ...prev,
-              brideName: inv.brideName,
-              groomName: inv.groomName,
-              venue: inv.mainVenue,
-              date: inv.mainDate,
+              brideName: inv.brideName || prev.brideName,
+              groomName: inv.groomName || prev.groomName,
+              venue: inv.mainVenue || prev.venue,
+              date: inv.mainDate || prev.date,
               time24: inv.mainTime || '19:30'
             }));
             if (inv.theme) setActiveTheme(inv.theme);
@@ -484,7 +488,7 @@ export default function App() {
     };
   }, [petalsActive]);
 
-  // Dynamic Family Compliments Line (Calculated from names)
+  // Dynamic Family Compliments Line
   const familyCompliments = useMemo(() => {
     const extractLastName = (fullName) => {
       if (!fullName) return '';
@@ -597,7 +601,7 @@ export default function App() {
       setSaveSuccess(true);
       triggerCelebration();
 
-      fetchDashboardData(savedSlug);
+      await fetchDashboardData(savedSlug);
     } catch (err) {
       alert(`Could not save to MongoDB: ${err.message}. Ensure backend is running.`);
     } finally {
@@ -609,6 +613,7 @@ export default function App() {
   const fetchAllWeddings = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/invites`);
+      if (!res.ok) return;
       const json = await res.json();
       if (json.success && json.data) {
         setAvailableWeddings(json.data);
@@ -620,7 +625,6 @@ export default function App() {
 
   // Fetch Guest Ledger strictly for the active couple ID
   const fetchDashboardData = async (slugParam) => {
-    setIsLoadingDashboard(true);
     const activeSlug = slugParam || currentSlug;
     
     if (!activeSlug) {
@@ -628,12 +632,20 @@ export default function App() {
         metrics: { totalSubmissions: 0, totalAdults: 0, totalKids: 0, jainMeals: 0, pureVegMeals: 0, swaminarayanMeals: 0 },
         guests: []
       });
-      setIsLoadingDashboard(false);
       return;
     }
 
+    setIsLoadingDashboard(true);
+
     try {
       const res = await fetch(`${API_BASE}/api/invites/${activeSlug}/rsvp-stats`);
+      if (!res.ok) {
+        setDashboardData({
+          metrics: { totalSubmissions: 0, totalAdults: 0, totalKids: 0, jainMeals: 0, pureVegMeals: 0, swaminarayanMeals: 0 },
+          guests: []
+        });
+        return;
+      }
       const json = await res.json();
       if (json.success && json.data) {
         setDashboardData(json.data);
@@ -644,37 +656,50 @@ export default function App() {
         });
       }
     } catch (err) {
-      console.error("Dashboard fetch error:", err);
+      console.error("Dashboard fetch error for slug:", activeSlug, err);
+      setDashboardData({
+        metrics: { totalSubmissions: 0, totalAdults: 0, totalKids: 0, jainMeals: 0, pureVegMeals: 0, swaminarayanMeals: 0 },
+        guests: []
+      });
     } finally {
       setIsLoadingDashboard(false);
     }
   };
 
   // Switch ledger view to a past/different wedding
-  const handleSwitchWeddingLedger = (selectedSlug) => {
+  const handleSwitchWeddingLedger = async (selectedSlug) => {
+    if (!selectedSlug) return;
+
     setCurrentSlug(selectedSlug);
     const updatedUrl = `${window.location.origin}${window.location.pathname}?invite=${selectedSlug}`;
     window.history.pushState({}, '', updatedUrl);
     setPublishedUrl(updatedUrl);
 
-    fetch(`${API_BASE}/api/invites/${selectedSlug}`)
-      .then(r => r.json())
-      .then(json => {
+    // 1. Fetch guest ledger for selected wedding
+    await fetchDashboardData(selectedSlug);
+
+    // 2. Load card editor details for selected wedding
+    try {
+      const r = await fetch(`${API_BASE}/api/invites/${selectedSlug}`);
+      if (r.ok) {
+        const json = await r.json();
         if (json.success && json.data) {
           const inv = json.data;
           setFormData(prev => ({
             ...prev,
-            brideName: inv.brideName,
-            groomName: inv.groomName,
-            venue: inv.mainVenue,
-            date: inv.mainDate,
+            brideName: inv.brideName || '',
+            groomName: inv.groomName || '',
+            hostsHindi: inv.parentsName || prev.hostsHindi,
+            venue: inv.mainVenue || '',
+            date: inv.mainDate || '',
             time24: inv.mainTime || '19:30'
           }));
           if (inv.theme) setActiveTheme(inv.theme);
         }
-      });
-
-    fetchDashboardData(selectedSlug);
+      }
+    } catch (err) {
+      console.error("Could not fetch wedding details for switch:", err);
+    }
   };
 
   // Submit RSVP to MongoDB under active wedding slug
@@ -714,7 +739,7 @@ export default function App() {
         const prefix = (cleanBride && cleanGroom) ? `${cleanBride}-weds-${cleanGroom}` : 'vivah';
         activeSlug = `${prefix}-${Date.now().toString().slice(-5)}${Math.floor(100 + Math.random() * 900)}`;
 
-        await fetch(`${API_BASE}/api/invites`, {
+        const createRes = await fetch(`${API_BASE}/api/invites`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -736,6 +761,10 @@ export default function App() {
           })
         });
 
+        if (!createRes.ok) {
+          throw new Error('Failed to create wedding card record before RSVP');
+        }
+
         setCurrentSlug(activeSlug);
         const autoUrl = `${window.location.origin}${window.location.pathname}?invite=${activeSlug}`;
         window.history.pushState({}, '', autoUrl);
@@ -756,13 +785,21 @@ export default function App() {
         })
       });
 
-      const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.message || 'Failed to submit RSVP');
+        const errText = await response.text();
+        let message = 'Failed to submit RSVP';
+        try {
+          const errObj = JSON.parse(errText);
+          message = errObj.message || message;
+        } catch (_) {
+          message = `Server responded with ${response.status}: ${response.statusText}`;
+        }
+        throw new Error(message);
       }
 
       setRsvpSuccess(true);
       triggerCelebration();
+      await fetchDashboardData(activeSlug);
     } catch (err) {
       setRsvpErrors({ phone: err.message || 'Server error. Is backend running?' });
     } finally {
@@ -810,10 +847,12 @@ export default function App() {
             
             {/* Host Dashboard Button */}
             <button
-              onClick={() => {
+              onClick={async () => {
                 setIsDashboardOpen(true);
-                fetchAllWeddings();
-                fetchDashboardData(currentSlug);
+                await fetchAllWeddings();
+                if (currentSlug) {
+                  await fetchDashboardData(currentSlug);
+                }
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-600/20 border border-amber-500/50 text-amber-200 hover:bg-amber-600/30 transition shadow-sm"
             >
@@ -1392,7 +1431,7 @@ export default function App() {
                         </a>
                       </div>
 
-                      {/* In-Card RSVP Form with Explicit Dark Text for High Contrast Across All Themes */}
+                      {/* In-Card RSVP Form */}
                       <div className="mt-4 pt-3 border-t border-amber-600/20">
                         <div className="text-center mb-2.5">
                           <h4 className="text-xs font-bold uppercase tracking-wider text-amber-900">
