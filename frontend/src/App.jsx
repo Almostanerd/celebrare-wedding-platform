@@ -26,8 +26,8 @@ import {
   FolderOpen
 } from 'lucide-react';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-const API_URL = rawApiUrl.replace(/\/+$/, '');
+const rawApiUrl = import.meta.env.VITE_API_URL || 'https://celebrare-wedding-platform.onrender.com';
+const API_BASE = rawApiUrl.replace(/\/+$/, '');
 // Cultural SVG Ornaments
 const GaneshaIcon = ({ className = "w-10 h-10", fill = "#D97706" }) => (
   <svg viewBox="0 0 100 100" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
